@@ -17,3 +17,11 @@ def normalize(state: np.ndarray) -> np.ndarray:
 	if norm == 0: 
 		raise ValueError("Cannot normalise zero vector!")
 	return state / norm 
+
+def validate_state(state: np.ndarray, num_qubits: int):
+    dim = 2 ** num_qubits 
+    if state.shape != (dim,): 
+        raise ValueError(f"State must be shape ({dim},), got {state.shape}")
+
+def copy_state(state: np.ndarray) -> np.ndarray: 
+    return np.array(state, copy=True) 
