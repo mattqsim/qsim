@@ -1,26 +1,3 @@
-import numpy as np
-
-from .gates import I
-from .states import zero_state
-
-
-# to be moved to evolution.py/hamiltonian.py
-
-def unitary_from_hamiltonian(H: np.ndarray, t: float) -> np.ndarray:
-    """
-    Build U = exp(-i H t) for (assumed) Hermitian H using eigendecomposition.
-    No SciPy required.
-    """
-    H = np.asarray(H, dtype=complex)
-    if H.ndim != 2 or H.shape[0] != H.shape[1]:
-        raise ValueError(f"H must be a square matrix, got shape {H.shape}")
-
-    # For Hermitian H, eigh is stable and eigenvalues are real (up to tiny numerical noise).
-    w, V = np.linalg.eigh(H)
-    phases = np.exp(-1j * w * float(t))
-    return V @ np.diag(phases) @ V.conj().T
-
-
 class Circuit:    
 # to be put into separate helper later     
     def run(self, shots: int = 1024) -> dict:
