@@ -3,23 +3,8 @@ import numpy as np
 from .gates import I
 from .states import zero_state
 
-def expand_single_qubit_gate(gate: np.ndarray, target: int, num_qubits: int) -> np.ndarray:
-    if target < 0 or target >= num_qubits:
-        raise ValueError(f"target must be in [0, {num_qubits - 1}], got {target}") 
 
-    ops = []
-    for qubit in range(num_qubits): 
-        if qubit == target:
-            ops.append(gate)
-        else:
-            ops.append(I)
-
-    big_op = ops[0]
-    for op in ops[1:]:
-        big_op = np.kron(big_op, op)
-
-    return big_op
-
+# to be moved to evolution.py/hamiltonian.py
 
 def unitary_from_hamiltonian(H: np.ndarray, t: float) -> np.ndarray:
     """
@@ -37,103 +22,7 @@ def unitary_from_hamiltonian(H: np.ndarray, t: float) -> np.ndarray:
 
 
 class Circuit:    
-    def __init__(self, num_qubits: int, *, backend: str = "statevector"):
-        if num_qubits <= 0:
-            raise ValueError("num_qubits must be positive")
-
-        if backend not in ("statevector", "density"): 
-            raise ValueError("backend must be 'statevector' or 'density'")
-
-        self.num_qubits = num_qubits
-        self.backend = backend
-        self.state = zero_state(num_qubits)
-
-        self.rho = None
-        if self.backend == "density": 
-            ket = self.state.reshape(-1, 1) 
-            self.rho = ket @ ket.conj().T
-        
-        self.history = []
-        self.noise = None
-
-
-    def apply_gate(self, gate, target, label=None, *, noisy: bool = True):
-
-        big_gate = expand_single_qubit_gate(gate, target, self.num_qubits) 
-
-        if self.backend == "statevector": 
-            self.state = big_gate @ self.state
-        else: 
-            self.rho = big_gate @ self.rho @ big_gate.conj().T
-
-        if label is not None:
-            self.history.append((label, target))
-        else:
-            self.history.append(("GATE", target))
-
-        if noisy:
-           self._apply_noise([target])
-    
-        return self.state if self.backend == "statevector" else self.rho 
-
-
-    def apply_cnot(self, control: int, target: int):
-        if control == target:
-           raise ValueError("control and target must be different")
-        if not (0 <= control < self.num_qubits):
-           raise ValueError(f"control must be in [0, {self.num_qubits - 1}], got {control}") 
-        if not (0 <= target < self.num_qubits):
-           raise ValueError(f"target must be in [0, {self.num_qubits - 1}], got {target}")
-
-        n = self.num_qubits
-        dim = 2 ** n
-
-        control_mask = 1 << (n - 1 - control)
-        target_mask = 1 << (n - 1 - target)
-
-        if self.backend == "statevector":
-            new_state = np.zeros_like(self.state)
-            for i in range(dim):
-                amp = self.state[i]
-                if amp == 0:
-                   continue
-
-                if i & control_mask: 
-
-                   j = i ^ target_mask
-                   new_state[j] += amp
-                else: 
-                   new_state[i] += amp
-
-            self.state = new_state
-        
-        else:
-            U = np.zeros((dim, dim), dtype=complex) 
-            for i in range(dim): 
-                if i & control_mask: 
-                    j = i ^ target_mask
-                else:
-                    j = i 
-                U[j, i] = 1.0 
-            self.rho = U @ self.rho @ U.conj().T
-    
-            
-        self._apply_noise([control, target])
-        self.history.append(("cnot", control, target))
-
-        return self.state if self.backend == "statevector" else self.rho
-
-    
-    def measure_all(self) -> str: 
-        p = self.probs()
-        dim = len(p) 
-        outcome_index = np.random.choice(dim, p=p)
-        
-        self._collapse_to_basis_index(outcome_index)
-        bitstring = format(outcome_index, f"0{self.num_qubits}b")
-        return bitstring
-
-    
+# to be put into separate helper later     
     def run(self, shots: int = 1024) -> dict:
         counts = {}
     
@@ -153,219 +42,8 @@ class Circuit:
             counts[outcome] = counts.get(outcome, 0) + 1
     
         return counts
-
-
-    def measure_qubit(self, qubit: int) -> str:
-
-        if not (0 <= qubit < self.num_qubits): 
-            raise ValueError("qubit error")
-
-        n = self.num_qubits
-        dim = 2 ** n
-
-        mask = 1 << (n - 1 - qubit) 
-
-        probs0 = 0.0 
-        probs1 = 0.0 
-        for i in range(dim): 
-            p = float(np.abs(self.state[i]) ** 2) 
-            if i & mask: 
-                probs1 += p 
-            else: 
-                probs0 += p 
-
-        total = probs0 + probs1 
-        if total == 0.0: 
-            raise ValueError("Zero total probability") 
-
-        probs0 /= total 
-        probs1 /= total 
-
-        outcome = int(np.random.choice([0, 1], p=[probs0, probs1]))
-
-        new_state = np.zeros_like(self.state) 
-        for i in range(dim): 
-            bit_is_1 = bool(i & mask) 
-            if bit_is_1 == (outcome ==1): 
-                new_state[i] = self.state[i]
-
-        norm = np.linalg.norm(new_state)
-        if norm == 0.0:
-            raise ValueError("Collapse produced zero vector") 
-        new_state = new_state / norm
-
-        self.state = new_state
-        return "1" if outcome == 1 else "0"
-
-
-    def measure_qubits(self, qubits: list[int]) -> str:
-
-        for q in qubits:
-            if not (0 <= q < self.num_qubits):
-                raise ValueError("Invalid") 
-
-        n = self.num_qubits
-        dim = 2 ** n 
-
-        masks = [(q, 1 << (n - 1 - q)) for q in qubits]
-
-        probs = {}
-        for i in range(dim): 
-            amp = self.state[i]
-            if amp == 0: 
-                continue
-
-            outcome_bits = []
-            for _, mask in masks: 
-                outcome_bits.append("1" if (i & mask) else "0")
-
-            outcome = "".join(outcome_bits) 
-            probs[outcome] = probs.get(outcome, 0.0) + abs(amp) ** 2
-
-        total = sum(probs.values())
-        if total == 0: 
-            raise ValueError("Total probability is zero") 
-        for k in probs: 
-            probs[k] /= total
-
-        outcomes = list(probs.keys())
-        weights = [probs[o] for o in outcomes]
-        measured = np.random.choice(outcomes, p=weights)
-
-        new_state = np.zeros_like(self.state) 
-        for i in range(dim): 
-            keep = True
-            for bit, (_, mask) in zip(measured, masks):
-                if ((i & mask) != 0) != (bit == "1"):
-                    keep = False 
-                    break
-            if keep: 
-                new_state[i] = self.state[i]
-
-        norm = np.linalg.norm(new_state) 
-        if norm == 0: 
-            raise ValueError("Collapse produced zero vector") 
-        new_state /= norm 
-
-        self.state = new_state
-        return measured 
-
-
-    def apply_swap(self, q1: int, q2: int): 
-        if q1 == q2: 
-            return self.state 
-        if not (0 <= q1 < self.num_qubits) or not (0 <= q2 < self.num_qubits): 
-            raise ValueError("q1 and q2 must be valid qubit indices")
-
-        n = self.num_qubits
-        dim = 2 ** n
-        m1 = 1 << (n - 1 - q1) 
-        m2 = 1 << (n - 1 - q2) 
-
-        new_state = self.state.copy()
-        for i in range(dim): 
-            b1 = 1 if (i & m1) else 0
-            b2 = 1 if (i & m2) else 0 
-            if b1 != b2:
-                j = i ^ (m1 | m2) 
-                if i < j: 
-                    new_state[i], new_state[j] = new_state[j], new_state[i] 
-
-        self.state = new_state
-        self._apply_noise([q1, q2])
-        self.history.append(("SWAP", q1, q2))
-  
-        return self.state 
-
-
-    def apply_cz(self, q1: int, q2: int): 
-        if q1 == q2:
-            raise ValueError("q1 and q2 must be different") 
-        if not (0 <= q1 < self.num_qubits) or not (0 <= q2 < self.num_qubits):
-            raise ValueError("q1 and q2 must be valid qubit indices") 
-
-        n = self.num_qubits 
-        dim = 2 ** n 
-        m1 = 1 << (n - 1 - q1)
-        m2 = 1 << (n - 1 - q2) 
-
-        new_state = self.state.copy() 
-        for i in range(dim): 
-            if (i & m1) and (i & m2): 
-                new_state[i] *= -1 
-
-        self.state = new_state
-        self._apply_noise([q1, q2])
-        if hasattr(self, "history"):
-            self.history.append(("CZ", q1, q2))
-        return self.state
-
-
-    def apply_cphase(self, q1: int, q2: int, theta: float):
-        if q1 == q2:
-            raise ValueError("q1 and q2 must be different")
-        if not (0 <= q1 < self.num_qubits) or not (0 <= q2 < self.num_qubits):
-            raise ValueError("q1 and q2 must be valid qubit indices")
-
-        n = self.num_qubits
-        dim = 2 ** n
-        m1 = 1 << (n - 1 - q1)
-        m2 = 1 << (n - 1 - q2)
-
-        phase = np.exp(1j * theta)
-
-        new_state = self.state.copy()
-        for i in range(dim):
-            if (i & m1) and (i & m2):
-                new_state[i] *= phase
-
-        self.state = new_state
-        self._apply_noise([q1, q2])
-        if hasattr(self, "history"):
-            self.history.append(("CPHASE", q1, q2, float(theta)))
-        return self.state
-
-
-    def apply_toffoli(self, c1: int, c2: int, target: int): 
-        if len({c1, c2, target}) !=3: 
-            raise ValueError("c1, c2, and target must be different qubits") 
-        if not (0 <= c1 < self.num_qubits) or not (0 <= c2 < self.num_qubits) or not (0 <= target < self.num_qubits): 
-            raise ValueError("c1, c2, target must be valid qubit indices")
-
-
-        n = self.num_qubits
-        dim = 2 ** n 
-        m1 = 1 << (n - 1 - c1) 
-        m2 = 1 << (n - 1 - c2) 
-        mt = 1 << (n - 1 - target) 
-
-        new_state = np.zeros_like(self.state) 
-
-        for i in range(dim): 
-            amp = self.state[i]
-            if amp == 0:
-                continue 
-
-            if (i & m1) and (i & m2): 
-                j = i ^ mt 
-                new_state[j] += amp 
-            else: 
-                new_state[i] += amp 
-
-        self.state = new_state
-        self._apply_noise([c1, c2, target])
-        self.history.append(("TOFFOLI", c1, c2, target))
-        return self.state
-
-        """ 
-        Adding describe 
-        will print state vector as sum of basic kets 
-
-        Args:
-          tol: ignore amplitudes with |amp| < tol
-          max terms: limit number of printed terms (None for no limit)   
-        """
-
+        
+# move to debug.py 
     def describe(self, tol: float = 1e-12, max_terms: int | None = 32): 
 
         terms = []
@@ -390,13 +68,11 @@ class Circuit:
             a = complex(amp)
             print(f"  {a.real:+.6f}{a.imag:+.6f}j  |{ket}⟩   P={prob:.6f}")
 
-
+# move to debug.py
     def __repr__(self):
         return f"Circuit(num_qubits={self.num_qubits}, dim={len(self.state)})"
 
-    def set_noise(self, noise_model):
-        self.noise = noise_model
-
+# move below to analysis.py 
     def probs(self) -> np.ndarray:
         if self.backend == "statevector":
             p = np.abs(self.state) ** 2
@@ -417,13 +93,6 @@ class Circuit:
         if self.backend == "density": 
             ket = new_state.reshape(-1, 1) 
             self.rho = ket @ ket.conj().T 
-
-    def _apply_noise(self, qubits: list[int]):
-        if self.noise is None:
-            return
-        from .noise import apply_noise_model
-        apply_noise_model(self, qubits, self.noise)
-        
 
     def _rho_like(self) -> np.ndarray:
         
@@ -470,6 +139,9 @@ class Circuit:
 
         return float(np.real(v))
 
+    # move above to analysis.py
+
+    # move to evolution.py 
 
     def evolve(self, H: np.ndarray, t: float):
         """
@@ -527,6 +199,13 @@ class Circuit:
         return self.state if self.backend == "statevector" else self.rho
 
 
+
+
+
+
+# all analysis
+
+    
     def expectation_pauli(self, pauli: str, target: int) -> float:
         """
         Expectation value of a single-qubit Pauli (X/Y/Z) on `target`,
@@ -677,6 +356,7 @@ def vqe_random_search(
 
     return best_params, float(best_cost)
 
+# move to another qiskit validation file 
 
 def _q_to_qiskit_index(q: int, n: int) -> int:
     """
@@ -918,6 +598,7 @@ def _default_n_from_qubits(qubits: list[int]) -> int:
         raise ValueError("qubit indices must be >= 0")
     return m + 1
 
+# move to a seperate scl file
 
 def circuit_to_scl(c: "Circuit") -> str:
     """
@@ -1000,6 +681,9 @@ def circuit_to_scl(c: "Circuit") -> str:
 
     return "\n".join(lines) + "\n"
 
+
+
+# move to generators.py 
 
 def bell_pair(q0: int, q1: int, *, backend: str = "statevector", as_scl: bool = False):
     """

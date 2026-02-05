@@ -6,6 +6,7 @@ import numpy as np
 from .state   import zero_state, validate_state, copy_state 
 from .apply   import apply_k_qubit_gate
 from .circuit import Circuit, Operation 
+from .noise   import apply_noise_to_statevector, NoiseModel
 
 
 def _validate_operation(op: Operation, num_qubits: int) -> None: 
@@ -57,4 +58,48 @@ def run_statevector(
             raise ValueError("State Normal Drifted") 
 
     return state 
+
+
+def run_noisy_statevector(
+    circuit: Circuit,
+    model: NoiseModel,
+    initial_state: Optional[np.ndarray] = None,
+    *,
+    rng: Optional[np.random.Generator] = None, 
+    validate: bool = True,
+) -> np.ndarray:
+    num_qubits = circuit.num_qubits
+
+    if rng is None: 
+        rng = np.random.default_rng()
+
+    if initial_state is None: 
+        state = zero_state(num_qubits)
+    else: 
+        validate_state(initial_state, num_qubits)
+        state = copy_state(initial_state)
+
+    for op in circuit.ops:
+        if validate: 
+            _validate_operation(op, num_qubits)
+
+        state = apply_k_qubit_gate(state, op.U, op.targets, num_qubits)
+
+
+        for q in op.targets:
+            state = apply_noise_to_statevector(
+                state, 
+                num_qubits=num_qubits,
+                qubit=int(q),
+                model=model,
+                rng=rng,
+            )
+
+    if validate: 
+        norm = np.linalg.norm(state)
+        if not np.isclose(norm, 1.0, atol=1e-10): 
+            raise ValueError(f"State norm drifted: ||psi||={norm} (expected ~1.0)")
+
+    return state
+        
     
