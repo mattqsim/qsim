@@ -3,10 +3,12 @@ from typing     import Optional
 
 import numpy as np 
 
-from .state   import zero_state, validate_state, copy_state 
-from .apply   import apply_k_qubit_gate
-from .circuit import Circuit, Operation 
-from .noise   import apply_noise_to_statevector, NoiseModel
+from .state       import zero_state, validate_state, copy_state 
+from .apply       import apply_k_qubit_gate
+from .circuit     import Circuit, Operation 
+from .noise       import apply_noise_to_statevector, NoiseModel
+from .measurement import measure_all
+
 
 
 def _validate_operation(op: Operation, num_qubits: int) -> None: 
@@ -102,4 +104,17 @@ def run_noisy_statevector(
 
     return state
         
-    
+
+def run_counts_statevector(circuit, shots=1024, seed=None):
+    num_qubits = circuit.num_qubits
+    psi = run_statevector(circuit)
+    rng = np.random.default_rng(seed)
+
+    counts = {}
+    for _ in range(shots):
+        outcome_index, _, _ = measure_all(psi.copy(), num_qubits, rng=rng)
+        bitstring = format(outcome_index, f"0{num_qubits}b")
+        counts[bitstring] = counts.get(bitstring, 0) + 1
+    return counts
+
+        
